@@ -54,6 +54,9 @@ proj_config_path = arguments.project_config
 source_stage = arguments.source_stage
 dest_stage = arguments.dest_stage
 
+pid = os.getpid()
+pid_str = str(pid)
+
 # bring in WordPress and stage settings from project.yml
 try:
         proj_config_file = open(proj_config_path, 'r')
@@ -170,42 +173,72 @@ source_pass = _mysql.escape_string(db_config[source_stage]['password'])
 
 print "Running a mysqldump on the source (" + source_stage + ") database..."
 
-sdump = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump -u ' + source_user + ' -p' + source_pass + ' ' + source_db], stdout=PIPE, stderr=STDOUT, universal_newlines=True)
+sdump = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' > ~/push_db_to_stage_' + pid_str + '_src_tmp.sql'], universal_newlines=True)
 
-source_dump = sdump.communicate()
+sdump.communicate()
+
+print "Done."
+print
+
+# download the file
+print "Downloading the dump..."
+
+sdump = Popen(['scp', '-P', ssh_ports[source_stage], users[source_stage] + '@' + ips[source_stage] + ':~/push_db_to_stage_' + pid_str + '_src_tmp.sql', '.'], universal_newlines=True)
+sdump.communicate()
+
+print "Done."
+print
+
+# remove from source
+print "Removing the temporary file from the " + source_stage + " server..."
+sdump = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'rm -fv -- ~/push_db_to_stage_' + pid_str + '_src_tmp.sql'], universal_newlines=True)
+
+sdump.communicate()
 
 
 print "Done."
 print
 
-
 # get confirmation from the user
-confirm = raw_input("This is your final stop before the push of the database to '" + dest_stage + "'. Once started, it must not be interrupted, or a restore may be needed. Do you want to go ahead? (y/n): ")
+confirm = raw_input("This is your final stop before the push of the database to '" + dest_stage + "'. Do you want to go ahead? (y/n): ")
 
 if not confirm == 'y' and not confirm == 'Y':
         print "Exiting as requesting."
         exit(1)
 
-
-print "Pushing the source (" + source_stage + ") database up to " + dest_stage + "..."
+print "Uploading the source (" + source_stage + ") database dump to " + dest_stage + "..."
 print
-print "Depending on upload speed and DB size, this may take a few minutes. Please be patient."
+ddump = Popen(['scp', '-P', ssh_ports[dest_stage], './push_db_to_stage_' + pid_str + '_src_tmp.sql', users[dest_stage] + '@' + ips[dest_stage] + ':~/push_db_to_stage_' + pid_str + '_dest_tmp.sql'], universal_newlines=True)
+ddump.communicate()
+
+print "Done."
+print
+
+print "Applying the (" + source_stage + ") database dump to the database on " + dest_stage + "..."
+print
 
 # execute against the destination
 dest_db = _mysql.escape_string(db_config[dest_stage]['name'])
 dest_user = _mysql.escape_string(db_config[dest_stage]['user'])
 dest_pass = _mysql.escape_string(db_config[dest_stage]['password'])
 
-dexec = Popen(['ssh', '-p', ssh_ports[dest_stage], '-l', users[dest_stage], ips[dest_stage], 'mysql -u ' + dest_user + ' -p' + dest_pass + ' ' + dest_db], stdin=PIPE, stdout=PIPE, stderr=STDOUT, universal_newlines=True)
+dexec = Popen(['ssh', '-p', ssh_ports[dest_stage], '-l', users[dest_stage], ips[dest_stage], 'mysql -u ' + dest_user + ' -p' + dest_pass + ' ' + dest_db + ' < ~/push_db_to_stage_' + pid_str + '_dest_tmp.sql'], universal_newlines=True)
 
-dest_result = dexec.communicate(input=source_dump[0])
+dexec.communicate()
 
 
 print "Done."
 print
 
+# remove from source
+print "Removing the temporary file from the " + dest_stage + " server..."
+ddump = Popen(['ssh', '-p', ssh_ports[dest_stage], '-l', users[dest_stage], ips[dest_stage], 'rm -fv -- ~/push_db_to_stage_' + pid_str + '_dest_tmp.sql'], universal_newlines=True)
+ 
+ddump.communicate()
+print "Done."
+print
+
 # now, change the variables that need changing
-print "Updating the post_content static content URLs on " + dest_stage + "..."
 
 # get the variables ready
 old_upload_url_path = _mysql.escape_string(upload_url_paths[source_stage])
@@ -226,13 +259,41 @@ UPDATE `" + tblprefix + "options` SET option_value = '" + new_upload_path + "' W
 UPDATE `" + tblprefix + "options` SET option_value = '" + new_upload_url_path + "' WHERE option_name = 'upload_url_path';\n\
 "
 
-uexec =  Popen(['ssh', '-p', ssh_ports[dest_stage], '-l', users[dest_stage], ips[dest_stage], 'mysql -u ' + dest_user + ' -p' + dest_pass + ' ' + dest_db], stdin=PIPE, stdout=PIPE, stderr=STDOUT, universal_newlines=True)
+# write this to a file, which we will then upload and execute against the destination database
+sql_file = open('./push_db_to_stage_' + pid_str + '_update_tmp.sql', 'w')
+sql_file.write(sql)
+sql_file.close()
 
-update_result = uexec.communicate(input=sql)
+# upload the SQL commands for update
+print "Uploading the SQL commands for updating static content URLs..."
+sqdump = Popen(['scp', '-P', ssh_ports[dest_stage], './push_db_to_stage_' + pid_str + '_update_tmp.sql', users[dest_stage] + '@' + ips[dest_stage] + ':~/push_db_to_stage_' + pid_str + '_update_tmp.sql'], universal_newlines=True)
+
+sqdump.communicate()
+print "Done."
+print
+
+# execute those commands
+print "Executing the update..."
+uexec =  Popen(['ssh', '-p', ssh_ports[dest_stage], '-l', users[dest_stage], ips[dest_stage], 'mysql -u ' + dest_user + ' -p' + dest_pass + ' ' + dest_db + ' < ~/push_db_to_stage_' + pid_str + '_update_tmp.sql'], universal_newlines=True)
+
+update_result = uexec.communicate()
 
 print "Done."
 print
 
+# remove from source
+print "Removing the temporary file from the " + dest_stage + " server..."
+udump = Popen(['ssh', '-p', ssh_ports[dest_stage], '-l', users[dest_stage], ips[dest_stage], 'rm -fv -- ~/push_db_to_stage_' + pid_str + '_update_tmp.sql'], universal_newlines=True)
+ 
+udump.communicate()
+print "Done."
+print
+
+
+# remove local temporary files
+print "Removing local temporary files..."
+os.remove('./push_db_to_stage_' + pid_str + '_update_tmp.sql')
+os.remove('./push_db_to_stage_' + pid_str + '_src_tmp.sql')
 
 print
 print "All done!"
