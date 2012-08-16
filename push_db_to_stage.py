@@ -118,7 +118,7 @@ for stage in [source_stage, dest_stage]:
 
 	homes[stage] = 'http://' + url_prefix + '.' + proj_config['application']['domain'] + '/'
 	siteurls[stage] = 'http://' + url_prefix + '.' + proj_config['application']['domain'] + '/wp'
-	upload_paths[stage] = '../../../../../content/uploads'
+	upload_paths[stage] = '../../../../../' + upload_url_path_prefix + '.' + proj_config['application']['domain'] + '/content/uploads'
 	upload_url_paths[stage] = 'http://' + upload_url_path_prefix + '.' + proj_config['application']['domain'] + '/content/uploads'
 
 
