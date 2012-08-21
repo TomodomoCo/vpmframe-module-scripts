@@ -167,7 +167,7 @@ if not confirm == 'y' and not confirm == 'Y':
 # connect to source
 source_db = _mysql.escape_string(db_config[source_stage]['name'])
 source_user = _mysql.escape_string(db_config[source_stage]['user'])
-source_pass = quote(db_config[source_stage]['password'])
+source_pass = _mysql.escape_string(db_config[source_stage]['password'])
 
 
 # mysqldump the source
@@ -221,7 +221,7 @@ print
 # execute against the destination
 dest_db = _mysql.escape_string(db_config[dest_stage]['name'])
 dest_user = _mysql.escape_string(db_config[dest_stage]['user'])
-dest_pass = quote(db_config[dest_stage]['password'])
+dest_pass = _mysql.escape_string(db_config[dest_stage]['password'])
 
 dexec = Popen(['ssh', '-p', ssh_ports[dest_stage], '-l', users[dest_stage], ips[dest_stage], 'mysql -u ' + dest_user + ' -p' + dest_pass + ' ' + dest_db + ' < ~/push_db_to_stage_' + pid_str + '_dest_tmp.sql'], universal_newlines=True)
 
