@@ -43,12 +43,12 @@ tbl_prefixes = {}
 
 # argument parsing
 parser = argparse.ArgumentParser(description='Command line arguments')
-parser.add_argument('source_stage', help='The stage from which to download the database.')
-parser.add_argument('dest_stage', help='The stage whose database should be replaced.')
 parser.add_argument('-d', '--database-config', default='config/database.yml', help='The path to the database.yml file. (Default: %(default)s)')
 parser.add_argument('-p', '--project-config', default='config/project.yml', help='The path to the project.yml file. (Default: %(default)s)')
 parser.add_argument('--ignore-upload-paths', action='store_true', help='Do not change the upload_path, upload_url_path, siteurl or home after the database is synced. (Default: %(default)s)')
 parser.add_argument('--update-site-paths', action='store_true', help='Update the siteurl and home paths in the database, after it is synced. (Default %(default)s)')
+parser.add_argument('-f', '--from', help='The stage from which to download the database.')
+parser.add_argument('-t', '--to', help='The stage whose database should be replaced.', action='append')
 arguments = parser.parse_args()
 
 
@@ -57,8 +57,12 @@ proj_config_path = arguments.project_config
 ignore_upload_paths = arguments.ignore_upload_paths
 update_site_paths = arguments.update_site_paths
 
-source_stage = arguments.source_stage
-dest_stage = arguments.dest_stage
+source_stage = vars(arguments)["from"] # hack, because 'from' is reserved, so we can't access it via the Namespace
+dest_stage = arguments.to
+
+print 'source_stage: ' + source_stage
+print 'dest_stage: ' + ', '.join(dest_stage)
+exit(0)
 
 pid = os.getpid()
 pid_str = str(pid)
