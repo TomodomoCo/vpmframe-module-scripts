@@ -120,7 +120,7 @@ for stage in [source_stage, dest_stage]:
 
 		# check for presence of upload paths for this stage in the project.yml
 		if 'upload_path' in proj_config['stage'][stage] and 'upload_url_path' in proj_config['stage'][stage]:
-			if len(proj_config['stage'][stage]['upload_path']) == 0 or len(proj_config['stage'][stage]['upload_url_path']) == 0:
+			if proj_config['stage'][stage]['upload_path'] is None or proj_config['stage'][stage]['upload_url_path'] is None or len(proj_config['stage'][stage]['upload_path']) == 0 or len(proj_config['stage'][stage]['upload_url_path']) == 0:
 				ignore_upload_paths = True
 				print "WARNING: The '" + stage + "' stage had an upload_path and upload_url_path, but at least one was blank."
 				print "The upload paths in the restored database will be left alone."
