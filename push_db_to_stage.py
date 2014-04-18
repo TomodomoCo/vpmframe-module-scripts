@@ -62,6 +62,10 @@ should_ignore_upload_paths = {}
 source_stage = vars(arguments)["from"] # hack, because 'from' is reserved, so we can't access it via the Namespace
 dest_stage = arguments.to
 
+if not source_stage or not dest_stage or len(source_stage) < 1 or len(dest_stage) < 1:
+	parser.print_help()
+	exit(2)
+
 pid = os.getpid()
 pid_str = str(pid)
 
@@ -179,9 +183,9 @@ for this_dest in dest_stage:
 		print "The '" + this_dest + "' stage was not found in the database config YAML file."        
 		exit(1)
 for stage in all_stages:
-	if not 'name' in db_config[stage] or not 'user' in db_config[stage] or not 'password' in db_config[stage] or not 'host' in db_config[stage] or not 'grant_to' in db_config[stage] or not 'tbl_prefix' in db_config[stage]:
+	if not 'name' in db_config[stage] or not 'user' in db_config[stage] or not 'password' in db_config[stage] or not 'host' in db_config[stage] or not 'grant_to' in db_config[stage] or not 'tbl_prefix' in db_config[stage] or not 'host' in db_config[stage]:
 		print "The '" + stage + "' stage does not have all of the required YAML attributes in the config file."
-		print "Does it have the 'tbl_prefix' in addition to the previously required attributes?"
+		print "Does it have the 'tbl_prefix' and 'host' in addition to the previously required attributes?"
 		exit(1)
 	tbl_prefixes[stage] = db_config[stage]['tbl_prefix']
 
@@ -201,13 +205,13 @@ if not confirm == 'y' and not confirm == 'Y':
 source_db = _mysql.escape_string(db_config[source_stage]['name'])
 source_user = _mysql.escape_string(db_config[source_stage]['user'])
 source_pass = quote(db_config[source_stage]['password'])
-
+source_host = _mysql.escape_string(db_config[source_stage]['host'])
 
 # mysqldump the source
 
 print "Running a mysqldump on the source (" + source_stage + ") database..."
 
-sdump = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' > ~/push_db_to_stage_' + pid_str + '_src_tmp.sql'], universal_newlines=True)
+sdump = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump -h ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' > ~/push_db_to_stage_' + pid_str + '_src_tmp.sql'], universal_newlines=True)
 
 sdump.communicate()
 
@@ -257,8 +261,9 @@ for this_dest in dest_stage:
 	dest_db = _mysql.escape_string(db_config[this_dest]['name'])
 	dest_user = _mysql.escape_string(db_config[this_dest]['user'])
 	dest_pass = quote(db_config[this_dest]['password'])
+	dest_host = _mysql.escape_string(db_config[this_dest]['host'])
 
-	dexec = Popen(['ssh', '-p', ssh_ports[this_dest], '-l', users[this_dest], ips[this_dest], 'mysql -u ' + dest_user + ' -p' + dest_pass + ' ' + dest_db + ' < ~/push_db_to_stage_' + pid_str + '_dest_tmp.sql'], universal_newlines=True)
+	dexec = Popen(['ssh', '-p', ssh_ports[this_dest], '-l', users[this_dest], ips[this_dest], 'mysql -h ' + dest_host + ' -u ' + dest_user + ' -p' + dest_pass + ' ' + dest_db + ' < ~/push_db_to_stage_' + pid_str + '_dest_tmp.sql'], universal_newlines=True)
 
 	dexec.communicate()
 
@@ -320,7 +325,7 @@ for this_dest in dest_stage:
 
 		# execute those commands
 		print "Executing the update..."
-		uexec =  Popen(['ssh', '-p', ssh_ports[this_dest], '-l', users[this_dest], ips[this_dest], 'mysql -u ' + dest_user + ' -p' + dest_pass + ' ' + dest_db + ' < ~/push_db_to_stage_' + pid_str + '_update_tmp.sql'], universal_newlines=True)
+		uexec =  Popen(['ssh', '-p', ssh_ports[this_dest], '-l', users[this_dest], ips[this_dest], 'mysql -h ' + dest_host + ' -u ' + dest_user + ' -p' + dest_pass + ' ' + dest_db + ' < ~/push_db_to_stage_' + pid_str + '_update_tmp.sql'], universal_newlines=True)
 
 		update_result = uexec.communicate()
 
