@@ -16,9 +16,6 @@
 # specified in database.yml.
 #
 #
-# PLEASE READ THIS:
-# This is not perfect. It should not be let loose on untrusted config input yet. Be careful with your YAML, sir.
-# You are at your own risk. It works for me on dev -> staging.
 
 import yaml
 import os
@@ -30,6 +27,7 @@ import _mysql
 from pprint import pprint
 import argparse
 from pipes import quote
+from datetime import datetime
 
 ips = {}
 ssh_ports = {}
@@ -49,6 +47,7 @@ parser.add_argument('--ignore-upload-paths', action='store_true', help='Do not c
 parser.add_argument('--update-site-paths', action='store_true', help='Update the siteurl and home paths in the database, after it is synced. (Default %(default)s)')
 parser.add_argument('-f', '--from', help='The stage from which to download the database.')
 parser.add_argument('-t', '--to', help='The stage whose database should be replaced.', action='append')
+parser.add_argument('--days', default=0, help='Transfer only the last n days of posts and related content. (Default: %(default)s, where 0 transfers all posts.)')
 arguments = parser.parse_args()
 
 
@@ -66,8 +65,21 @@ if not source_stage or not dest_stage or len(source_stage) < 1 or len(dest_stage
 	parser.print_help()
 	exit(2)
 
+try:
+        days = int(arguments.days)
+except ValueError as e:
+        parser.print_help()
+        exit(2)
+
+if days < 0:
+        print "--days must be greater than or equal to 0."
+        print
+        parser.print_help()
+        exit(2)
+
+
 pid = os.getpid()
-pid_str = str(pid)
+pid_str = str(pid) + '_' + datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
 
 # bring in WordPress and stage settings from project.yml
 try:
@@ -209,11 +221,78 @@ source_host = _mysql.escape_string(db_config[source_stage]['host'])
 
 # mysqldump the source
 
-print "Running a mysqldump on the source (" + source_stage + ") database..."
+# simple method for days=0
+if days == 0:
+    print "Running a simple mysqldump on the source (" + source_stage + ") database..."
 
-sdump = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump -h ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' > ~/push_db_to_stage_' + pid_str + '_src_tmp.sql'], universal_newlines=True)
+    sdump = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump -h ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' > ~/push_db_to_stage_' + pid_str + '_src_tmp.sql'], universal_newlines=True)
 
-sdump.communicate()
+    sdump.communicate()
+
+else:
+    # complex method for selective dumping
+
+    # first determine how many posts we will pull with this number of days
+    print
+    print "#########################################################################"
+    print "INFO: This dump of " + str(days) + " days will have the following number of posts (includes revisions, drafts):"
+    print "Please note that your database tables must be in InnoDB format, or the dumps below will not succeed."
+
+    postnumcmd = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysql -t -Bh ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' -e "SELECT COUNT(ID) AS posts_subset_count FROM ' + tbl_prefixes[source_stage] + 'posts WHERE post_modified_gmt > (NOW() - INTERVAL ' + str(days) + ' DAY);" '], universal_newlines=True)
+    postnumcmd.communicate()
+    
+    # get confirmation from the user
+    confirm = raw_input("Are you sure you want to replace the data on '" + ", ".join(dest_stage) + "' with this subset of posts? (y/n): ")
+
+    if not confirm == 'y' and not confirm == 'Y':
+	print "Exiting as requesting."
+	exit(1)
+
+    # selectively dump the wp_posts table
+    wpposts = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump --single-transaction -h ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' ' + tbl_prefixes[source_stage] + 'posts --where="post_modified_gmt > ( NOW() - INTERVAL ' + str(days) + ' DAY)" > ~/push_db_to_stage_' + pid_str + '_posts_src_tmp.sql'], universal_newlines=True)
+    wpposts.communicate()
+
+    # selectively dump wp_postmeta
+    wppostmeta = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump --single-transaction -h ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' ' + tbl_prefixes[source_stage] + 'postmeta --where="post_id IN (SELECT ID FROM ' + tbl_prefixes[source_stage] + 'posts WHERE post_modified_gmt > ( NOW() - INTERVAL ' + str(days) + ' DAY))" > ~/push_db_to_stage_' + pid_str + '_postmeta_src_tmp.sql'], universal_newlines=True)
+    wppostmeta.communicate()
+
+    # selectively dump wp_comments
+    wpcomments = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump --single-transaction -h ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' ' + tbl_prefixes[source_stage] + 'comments --where="comment_post_id IN (SELECT ID FROM ' + tbl_prefixes[source_stage] + 'posts WHERE post_modified_gmt > ( NOW() - INTERVAL ' + str(days) + ' DAY))" > ~/push_db_to_stage_' + pid_str + '_comments_src_tmp.sql'], universal_newlines=True)
+    wpcomments.communicate()
+
+    # selectively dump wp_commentmeta
+    wpcommentmeta = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump --single-transaction -h ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' ' + tbl_prefixes[source_stage] + 'commentmeta --where="comment_id IN (SELECT comment_post_ID FROM ' + tbl_prefixes[source_stage] + 'comments AS wpc INNER JOIN ' + tbl_prefixes[source_stage] + 'posts AS wpp ON wpp.ID = wpc.comment_post_ID WHERE wpp.post_modified_gmt > ( NOW() - INTERVAL ' + str(days) + ' DAY))" > ~/push_db_to_stage_' + pid_str + '_commentmeta_src_tmp.sql'], universal_newlines=True)
+    wpcommentmeta.communicate()
+
+    # selectively dump wp_term_relationships
+    wpterm_relationships = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump --single-transaction -h ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' ' + tbl_prefixes[source_stage] + 'term_relationships --where="object_id IN (SELECT ID FROM ' + tbl_prefixes[source_stage] + 'posts AS wpp WHERE wpp.post_modified_gmt > ( NOW() - INTERVAL ' + str(days) + ' DAY))" > ~/push_db_to_stage_' + pid_str + '_term_relationships_src_tmp.sql'], universal_newlines=True)
+    wpterm_relationships.communicate()
+
+
+    print
+    print "INFO: It is safe to ignore warnings about " + tbl_prefixes[source_stage] + "cfs_values being missing if CFS is not installed in this site."
+
+
+    # selectively dump wp_cfs_values
+    wpcfs_values = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump --single-transaction -h ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' ' + tbl_prefixes[source_stage] + 'cfs_values --where="post_id IN (SELECT ID FROM ' + tbl_prefixes[source_stage] + 'posts AS wpp WHERE wpp.post_modified_gmt > ( NOW() - INTERVAL ' + str(days) + ' DAY))" > ~/push_db_to_stage_' + pid_str + '_cfs_values_src_tmp.sql'], universal_newlines=True)
+    wpcfs_values.communicate()
+
+
+    # full dump of all other tables
+    ignore_tables = '--ignore-table=' + source_db + '.' + tbl_prefixes[source_stage] + 'posts '
+    ignore_tables += '--ignore-table=' + source_db + '.' + tbl_prefixes[source_stage] + 'postmeta '
+    ignore_tables += '--ignore-table=' + source_db + '.' + tbl_prefixes[source_stage] + 'comments '
+    ignore_tables += '--ignore-table=' + source_db + '.' + tbl_prefixes[source_stage] + 'commentmeta '
+    ignore_tables += '--ignore-table=' + source_db + '.' + tbl_prefixes[source_stage] + 'term_relationships '
+    ignore_tables += '--ignore-table=' + source_db + '.' + tbl_prefixes[source_stage] + 'cfs_values '
+
+
+    sdump = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump ' + ignore_tables + ' -h ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' > ~/push_db_to_stage_' + pid_str + '_other_tmp.sql'], universal_newlines=True)
+    sdump.communicate() 
+
+    # merge dumps
+    mergedumps = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'cat ~/push_db_to_stage_' + pid_str + '*.sql > ~/push_db_to_stage_' + pid_str + '_src_tmp.sql'], universal_newlines=True)
+    mergedumps.communicate() 
 
 print "Done."
 print
@@ -229,7 +308,7 @@ print
 
 # remove from source
 print "Removing the temporary file from the " + source_stage + " server..."
-sdump = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'rm -fv -- ~/push_db_to_stage_' + pid_str + '_src_tmp.sql'], universal_newlines=True)
+sdump = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'rm -fv -- ~/push_db_to_stage_' + pid_str + '*.sql'], universal_newlines=True)
 
 sdump.communicate()
 
