@@ -48,6 +48,7 @@ parser.add_argument('--update-site-paths', action='store_true', help='Update the
 parser.add_argument('-f', '--from', help='The stage from which to download the database.')
 parser.add_argument('-t', '--to', help='The stage whose database should be replaced.', action='append')
 parser.add_argument('--days', default=0, help='Transfer only the last n days of posts and related content. (Default: %(default)s, where 0 transfers all posts.)')
+parser.add_argument('--source-prefix-override', default=None, help='Force the source database table prefix to the specified prefix. Useful with WP Multisite')
 arguments = parser.parse_args()
 
 
@@ -201,6 +202,13 @@ for stage in all_stages:
 		exit(1)
 	tbl_prefixes[stage] = db_config[stage]['tbl_prefix']
 
+
+if arguments.source_prefix_override is not None:
+    tbl_prefixes[source_stage] = arguments.source_prefix_override
+    print "INFO: Source table prefix is overriden to '" + arguments.source_prefix_override + "'. Ensure this includes a trailing underscore if appropriate!"
+    print
+
+
 source_db_prefix = source_stage[0] + "_"
 dest_db_prefix = dest_stage[0] + "_"
 
@@ -277,17 +285,22 @@ else:
     wpcfs_values = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump --single-transaction -h ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' ' + tbl_prefixes[source_stage] + 'cfs_values --where="post_id IN (SELECT ID FROM ' + tbl_prefixes[source_stage] + 'posts AS wpp WHERE wpp.post_modified_gmt > ( NOW() - INTERVAL ' + str(days) + ' DAY))" > ~/push_db_to_stage_' + pid_str + '_cfs_values_src_tmp.sql'], universal_newlines=True)
     wpcfs_values.communicate()
 
+    # dump other tables
 
-    # full dump of all other tables
-    ignore_tables = '--ignore-table=' + source_db + '.' + tbl_prefixes[source_stage] + 'posts '
-    ignore_tables += '--ignore-table=' + source_db + '.' + tbl_prefixes[source_stage] + 'postmeta '
-    ignore_tables += '--ignore-table=' + source_db + '.' + tbl_prefixes[source_stage] + 'comments '
-    ignore_tables += '--ignore-table=' + source_db + '.' + tbl_prefixes[source_stage] + 'commentmeta '
-    ignore_tables += '--ignore-table=' + source_db + '.' + tbl_prefixes[source_stage] + 'term_relationships '
-    ignore_tables += '--ignore-table=' + source_db + '.' + tbl_prefixes[source_stage] + 'cfs_values '
+    # tables dump subquery for listing tables to dump -- we exclude the separate ones we have done
+    ignore_tables = [ 'posts', 'postmeta', 'comments', 'commentmeta', 'term_relationships', 'cfs_values' ]
+    ignore_tables_formatted = ''
 
+    for table in ignore_tables:
+            ignore_tables_formatted += '\'' + tbl_prefixes[source_stage] + table + '\','
 
-    sdump = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump ' + ignore_tables + ' -h ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' > ~/push_db_to_stage_' + pid_str + '_other_tmp.sql'], universal_newlines=True)
+    ignore_tables_formatted = ignore_tables_formatted[:-1] # cut off last comma
+
+    # this subquery selects which tables specifically for mysqldump to dump below
+    tables_subquery = 'mysql -h ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' -Bse "SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=\'' + source_db + '\' AND TABLE_NAME LIKE \'' + tbl_prefixes[source_stage] + '%\' AND TABLE_NAME NOT IN (' + ignore_tables_formatted + ')"'
+    
+    # actually do the 'other' tables dump
+    sdump = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'mysqldump -h ' + source_host + ' -u ' + source_user + ' -p' + source_pass + ' ' + source_db + ' --tables $(' + tables_subquery + ') > ~/push_db_to_stage_' + pid_str + '_other_tmp.sql'], universal_newlines=True)
     sdump.communicate() 
 
     # merge dumps
