@@ -267,7 +267,15 @@ else:
         dumpable_prefixes.append( dumpable_prefix ) 
 
     lt.close()
+    
+    # remove local temporary file...
     os.remove('./push_db_to_stage_' + pid_str + '_' + source_db + '_list.txt')
+    
+    # remove from source...
+    print "Removing the temporary file from the " + source_stage + " server..."
+    removesource = Popen(['ssh', '-p', ssh_ports[source_stage], '-l', users[source_stage], ips[source_stage], 'rm -fv -- ~/push_db_to_stage_' + pid_str + '_' + source_db + '_list.txt'], universal_newlines=True)
+    removesource.communicate()
+
     print
 
     # determine number of posts that will be pulled from each prefix
