@@ -64,7 +64,7 @@ if not 'secret_access_key' in config:
 
 try:
 	# connect to S3
-	s3 = S3Connection(config['access_key'], config['secret_access_key'])
+	s3 = S3Connection(config['access_key'], config['secret_access_key'], calling_format=boto.s3.connection.OrdinaryCallingFormat())
 
 	# connect to the bucket
 	bucket = Bucket(s3, config['bucket_name'])
